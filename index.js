@@ -22,6 +22,19 @@ if (process.env.REQUIRE_API_KEY !== "false") {
 	});
 }
 
+// Log all requests and how long it took
+app.use((req, res, next) => {
+	const start = Date.now();
+	const timestamp = new Date().toISOString();
+	
+	res.on("finish", () => {
+		const duration = Date.now() - start;
+		console.log(`[${timestamp}] ${req.method} ${req.originalUrl} - ${res.statusCode} - ${duration}ms`);
+	});
+	
+	next();
+});
+
 // Load disk usage at startup
 await loadUsage();
 
