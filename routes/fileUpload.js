@@ -4,56 +4,94 @@ import fsp from "fs/promises";
 import path from "path";
 import { getUsage, setUsage } from "../utils/diskUsage.js";
 import fs from "fs";
-import dotenv from "dotenv";
+import env from "../utils/env.js";
+import { PutObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 
-dotenv.config();
-
-const STORAGE_PATH = process.env.STORAGE_PATH || "./storage";
+const s3Client = env.s3Client;
 
 const router = Router();
 
 router.put("/file/:filename", async (req, res) => {
-    // Shard file path
-    const filePath = shardPath(req.params.filename);
-    await fsp.mkdir(path.dirname(filePath), { recursive: true });
+	const filename = req.params.filename;
+	const filePath = shardPath(filename);
+	let existingSize = 0;
 
-    // Get (existing) file size
-    let byteCount = 0;
-    let existingSize = 0;
+	if (env.S3) {
+		const Key = filePath;
+		try {
+			const head = await s3Client.send(
+				new HeadObjectCommand({
+					Bucket: env.S3_BUCKET,
+					Key,
+				})
+			);
+			existingSize = head.ContentLength ?? 0;
+		} catch (err) {
+			if (err.name !== "NotFound") throw err;
+		}
 
-    try {
-        const stat = await fsp.stat(filePath);
-        existingSize = stat.size;
-    } catch {
-        existingSize = 0;
-    }
+		const chunks = [];
+		let byteCount = 0;
 
-    // Write the (new) file
-    const writeStream = fs.createWriteStream(filePath);
-    req.on("data", (chunk) => (byteCount += chunk.length));
-    req.pipe(writeStream);
+		for await (const chunk of req) {
+			chunks.push(chunk);
+			byteCount += chunk.length;
+		}
 
-    // Update disk usage
-    writeStream.on("finish", async () => {
-        let totalSize = getUsage() - existingSize + byteCount;
-        await setUsage(totalSize);
-        res.json({
-            uploaded: req.params.filename,
-            replaced: existingSize > 0,
-            oldSize: existingSize,
-            newSize: byteCount,
-            totalSize,
-        });
-    });
+		const bodyBuffer = Buffer.concat(chunks);
 
-    writeStream.on("close", () => {
-        console.log(`File ${req.params.filename} uploaded successfully.`);
-    });
+		await s3Client.send(
+			new PutObjectCommand({
+				Bucket: env.S3_BUCKET,
+				Key,
+				Body: bodyBuffer,
+			})
+		);
 
-    writeStream.on("error", (err) => {
-        console.error(err);
-        res.status(500).json({ error: "Failed to write file" });
-    });
+		const totalSize = getUsage() - existingSize + byteCount;
+		await setUsage(totalSize);
+
+		return res.json({
+			uploaded: filename,
+			replaced: existingSize > 0,
+			oldSize: existingSize,
+			newSize: byteCount,
+			totalSize,
+		});
+	} else {
+		await fsp.mkdir(path.dirname(filePath), { recursive: true });
+
+		try {
+			const stat = await fsp.stat(filePath);
+			existingSize = stat.size;
+		} catch {
+			existingSize = 0;
+		}
+
+		let byteCount = 0;
+		const writeStream = fs.createWriteStream(filePath);
+
+		req.on("data", (chunk) => (byteCount += chunk.length));
+		req.pipe(writeStream);
+
+		writeStream.on("finish", async () => {
+			const totalSize = getUsage() - existingSize + byteCount;
+			await setUsage(totalSize);
+
+			res.json({
+				uploaded: filename,
+				replaced: existingSize > 0,
+				oldSize: existingSize,
+				newSize: byteCount,
+				totalSize,
+			});
+		});
+
+		writeStream.on("error", (err) => {
+			console.error(err);
+			res.status(500).json({ error: "Failed to write file" });
+		});
+	}
 });
 
 export default router;
