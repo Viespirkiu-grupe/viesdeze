@@ -41,31 +41,3 @@ export async function loadUsage() {
 export async function saveUsage() {
     await fsp.writeFile(USAGE_FILE, JSON.stringify({ totalSize }));
 }
-
-/**
- * Recursively calculates the total size of all files in the storage directory.
- * Updates totalSize and saves it to the usage.json file.
- */
-export async function calculateTotalSize() {
-    let size = 0;
-    const walk = async (dir) => {
-        const entries = await fsp.readdir(dir, { withFileTypes: true });
-        for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-            if (entry.isDirectory()) {
-                await walk(fullPath);
-            } else {
-                const stat = await fsp.stat(fullPath);
-                size += stat.size;
-            }
-        }
-    };
-    try {
-        await walk(STORAGE_PATH);
-        totalSize = size;
-        await saveUsage();
-        console.log(`Recalculated total size: ${size} bytes`);
-    } catch (err) {
-        console.error("Failed to recalculate storage:", err);
-    }
-}

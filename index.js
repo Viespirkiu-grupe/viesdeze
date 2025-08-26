@@ -1,21 +1,19 @@
 import express from "express";
 import fsp from "fs/promises";
-import dotenv from "dotenv";
 import { loadUsage } from "./utils/diskUsage.js";
-
-dotenv.config();
+import env from "./utils/env.js";
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const STORAGE_PATH = process.env.STORAGE_PATH || "./storage";
+const PORT = env.PORT || 3000;
+const STORAGE_PATH = env.STORAGE_PATH || "./storage";
 
 app.use(express.json());
 
 
 // Require API key for all routes if set
-if (process.env.REQUIRE_API_KEY !== "false") {
+if (env.REQUIRE_API_KEY !== "false") {
 	app.use((req, res, next) => {
-		if (req.headers["x-api-key"] !== process.env.API_KEY) {
+		if (req.headers["x-api-key"] !== env.API_KEY) {
 			return res.status(403).json({ error: "Forbidden" });
 		}
 		next();

@@ -1,9 +1,7 @@
 import path from "path";
-import dotenv from "dotenv";
+import env from "./env.js";
 
-dotenv.config();
-
-const STORAGE_PATH = process.env.STORAGE_PATH || "./storage";
+const STORAGE_PATH = env.STORAGE_PATH || "./storage";
 
 /**
  * Shards a path by making the first two characters of the filename a subdirectory.
