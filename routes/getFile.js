@@ -15,15 +15,32 @@ router.get("/file/:filename", async (req, res) => {
     const basePath = shardPath(req.params.filename);
 
     if (env.S3) {
-        const Key = basePath;
+        let Key = basePath;
 
         try {
-            const head = await s3Client.send(
-                new HeadObjectCommand({
-                    Bucket: env.S3_BUCKET,
-                    Key,
-                }),
-            );
+            const candidates = generateCandidatePaths(basePath);
+            let foundKey = false;
+            let head;
+
+            for (const testKey of candidates) {
+                console.log("Testing key:", testKey);
+                try {
+                    head = await s3Client.send(
+                        new HeadObjectCommand({
+                            Bucket: env.S3_BUCKET,
+                            Key: testKey,
+                        }),
+                    );
+                    Key = testKey;
+                    foundKey = true;
+                    break;
+                } catch (err) {}
+            }
+
+            if (!foundKey) {
+                console.log("Actually didn't find");
+                return res.status(404).json({ error: "File not found" });
+            }
 
             const fileSize = head.ContentLength ?? 0;
             const contentType = mime.getType(Key) || "application/octet-stream";
