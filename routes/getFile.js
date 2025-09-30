@@ -6,6 +6,8 @@ import mime from "mime";
 import generateCandidatePaths from "../utils/candidatePaths.js";
 import env from "../utils/env.js";
 import { GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
+import { AbortController } from "@aws-sdk/abort-controller";
+
 
 const s3Client = env.s3Client;
 
@@ -57,22 +59,34 @@ router.get("/file/:filename", async (req, res) => {
                         .set("Content-Range", `bytes */${fileSize}`)
                         .end();
                 }
+                const controller = new AbortController();
+                const abortOnClose = () => controller.abort();
+                req.once("close", abortOnClose);
+                res.once("close", abortOnClose);
+                try {
+                    const getCommand = new GetObjectCommand({
+                        Bucket: env.S3_BUCKET,
+                        Key,
+                        Range: `bytes=${start}-${end}`,
+                    });
+                    const data = await s3Client.send(getCommand, { abortSignal: controller.signal });
 
-                const getCommand = new GetObjectCommand({
-                    Bucket: env.S3_BUCKET,
-                    Key,
-                    Range: `bytes=${start}-${end}`,
-                });
-                const data = await s3Client.send(getCommand);
+                    res.status(206).set({
+                        "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+                        "Accept-Ranges": "bytes",
+                        "Content-Length": end - start + 1,
+                        "Content-Type": contentType,
+                    });
 
-                res.status(206).set({
-                    "Content-Range": `bytes ${start}-${end}/${fileSize}`,
-                    "Accept-Ranges": "bytes",
-                    "Content-Length": end - start + 1,
-                    "Content-Type": contentType,
-                });
-
-                data.Body.pipe(res);
+                    data.Body.pipe(res);
+                } catch (err) {
+                    controller.abort();
+                    throw err;
+                } finally {
+                    controller.abort();
+                    req.off("close", abortOnClose);
+                    res.off("close", abortOnClose);
+                }
             } else {
                 const getCommand = new GetObjectCommand({
                     Bucket: env.S3_BUCKET,
