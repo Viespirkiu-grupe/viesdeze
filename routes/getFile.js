@@ -6,6 +6,7 @@ import mime from "mime";
 import generateCandidatePaths from "../utils/candidatePaths.js";
 import env from "../utils/env.js";
 import { GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
+import { AbortController } from "@aws-sdk/abort-controller";
 
 const s3Client = env.s3Client;
 
@@ -18,12 +19,15 @@ router.get("/file/:filename", async (req, res) => {
         let Key = basePath;
 
         try {
+            // Often there is an extension on the file, try to find it
             const candidates = generateCandidatePaths(basePath);
-            let foundKey = false;
+
             let head;
+            let foundKey = false;
+            let attemptsToFindKey = 0;
 
             for (const testKey of candidates) {
-                console.log("Testing key:", testKey);
+                attemptsToFindKey++;
                 try {
                     head = await s3Client.send(
                         new HeadObjectCommand({
@@ -38,15 +42,21 @@ router.get("/file/:filename", async (req, res) => {
             }
 
             if (!foundKey) {
-                console.log("Actually didn't find");
+                console.log("Couldn't find the file in S3");
                 return res.status(404).json({ error: "File not found" });
             }
 
+            console.log(
+                `File found in ${attemptsToFindKey} attempts of guessing the extension.`,
+            );
+
+            // Metadata
             const fileSize = head.ContentLength ?? 0;
             const contentType = mime.getType(Key) || "application/octet-stream";
             const range = req.headers.range;
 
             if (range) {
+                // Ranged requests
                 const parts = range.replace(/bytes=/, "").split("-");
                 const start = parseInt(parts[0], 10);
                 const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
@@ -58,22 +68,44 @@ router.get("/file/:filename", async (req, res) => {
                         .end();
                 }
 
-                const getCommand = new GetObjectCommand({
-                    Bucket: env.S3_BUCKET,
-                    Key,
-                    Range: `bytes=${start}-${end}`,
-                });
-                const data = await s3Client.send(getCommand);
+                const controller = new AbortController();
 
-                res.status(206).set({
-                    "Content-Range": `bytes ${start}-${end}/${fileSize}`,
-                    "Accept-Ranges": "bytes",
-                    "Content-Length": end - start + 1,
-                    "Content-Type": contentType,
+                req.once("close", () => {
+                    controller.abort();
+                    data?.Body?.destroy();
+                });
+                res.once("close", () => {
+                    controller.abort();
                 });
 
-                data.Body.pipe(res);
+                try {
+                    const getCommand = new GetObjectCommand({
+                        Bucket: env.S3_BUCKET,
+                        Key,
+                        Range: `bytes=${start}-${end}`,
+                    });
+                    const data = await s3Client.send(getCommand, {
+                        abortSignal: controller.signal,
+                    });
+
+                    res.status(206).set({
+                        "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+                        "Accept-Ranges": "bytes",
+                        "Content-Length": end - start + 1,
+                        "Content-Type": contentType,
+                    });
+
+                    data.Body.pipe(res);
+                } catch (err) {
+                    controller.abort();
+                    throw err;
+                } finally {
+                    controller.abort();
+                    req.off("close", abortOnClose);
+                    res.off("close", abortOnClose);
+                }
             } else {
+                // Full requests
                 const getCommand = new GetObjectCommand({
                     Bucket: env.S3_BUCKET,
                     Key,
@@ -90,14 +122,17 @@ router.get("/file/:filename", async (req, res) => {
             }
         } catch (err) {
             console.error(err);
-            return res.status(404).json({ error: "File not found" });
+            return res.status(500).json({ error: true });
         }
     } else {
+        // Filesystem mode
         const candidates = generateCandidatePaths(basePath);
+
         let stat;
         let filePath;
 
         try {
+            // Try to find the correct filename (with / without extension)
             for (const candidate of candidates) {
                 try {
                     stat = await fsp.stat(candidate);
@@ -112,12 +147,14 @@ router.get("/file/:filename", async (req, res) => {
                 return res.status(404).json({ error: "File not found" });
             }
 
+            // Metadata
             const fileSize = stat.size;
             const contentType =
                 mime.getType(filePath) || "application/octet-stream";
             const range = req.headers.range;
 
             if (range) {
+                // Ranged requests
                 const parts = range.replace(/bytes=/, "").split("-");
                 const start = parseInt(parts[0], 10);
                 const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
@@ -138,6 +175,7 @@ router.get("/file/:filename", async (req, res) => {
 
                 fs.createReadStream(filePath, { start, end }).pipe(res);
             } else {
+                // Full requests
                 res.status(200).set({
                     "Content-Length": fileSize,
                     "Content-Type": contentType,
@@ -148,7 +186,7 @@ router.get("/file/:filename", async (req, res) => {
             }
         } catch (err) {
             console.error(err);
-            res.status(404).json({ error: "File not found" });
+            res.status(500).json({ error: true });
         }
     }
 });

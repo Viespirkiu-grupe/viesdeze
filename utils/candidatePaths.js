@@ -9,11 +9,11 @@
 export default function generateCandidatePaths(basePath) {
     return [
         basePath,
-        basePath.replace(/\.(jpe?g)$/i, (ext) =>
-            ext.toLowerCase() === ".jpeg" ? ".jpg" : ".jpeg",
-        ),
         basePath.replace(/\.[^/.]+$/, ""),
         basePath.replace(/\.[^/.]+$/, "") + ".bin",
         basePath.replace(/\.[^/.]+$/, "") + ".php",
+        basePath.replace(/\.(jpe?g)$/i, (ext) =>
+            ext.toLowerCase() === ".jpeg" ? ".jpg" : ".jpeg",
+        ),
     ].filter(Boolean);
 }
