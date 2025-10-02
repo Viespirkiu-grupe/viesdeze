@@ -81,6 +81,10 @@ router.get("/file/:filename", async (req, res) => {
                     "Content-Type": contentType,
                 });
 
+                req.on("close", () => {
+                    if (data.Body?.destroy) data.Body.destroy();
+                });
+
                 data.Body.pipe(res);
             } else {
                 // Full requests
@@ -94,6 +98,10 @@ router.get("/file/:filename", async (req, res) => {
                     "Content-Length": fileSize,
                     "Content-Type": contentType,
                     "Accept-Ranges": "bytes",
+                });
+
+                req.on("close", () => {
+                    if (data.Body?.destroy) data.Body.destroy();
                 });
 
                 data.Body.pipe(res);
