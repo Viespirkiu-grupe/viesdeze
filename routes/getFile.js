@@ -68,77 +68,36 @@ router.get("/file/:filename", async (req, res) => {
                         .end();
                 }
 
-                const controller = new AbortController();
-
-                req.once("close", () => {
-                    controller.abort();
-                    data?.Body?.destroy();
+                const getCommand = new GetObjectCommand({
+                    Bucket: env.S3_BUCKET,
+                    Key,
+                    Range: `bytes=${start}-${end}`,
                 });
-                res.once("close", () => {
-                    controller.abort();
+                const data = await s3Client.send(getCommand, {});
+
+                res.status(206).set({
+                    "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": end - start + 1,
+                    "Content-Type": contentType,
                 });
 
-                try {
-                    const getCommand = new GetObjectCommand({
-                        Bucket: env.S3_BUCKET,
-                        Key,
-                        Range: `bytes=${start}-${end}`,
-                    });
-                    const data = await s3Client.send(getCommand, {
-                        abortSignal: controller.signal,
-                    });
-
-                    res.status(206).set({
-                        "Content-Range": `bytes ${start}-${end}/${fileSize}`,
-                        "Accept-Ranges": "bytes",
-                        "Content-Length": end - start + 1,
-                        "Content-Type": contentType,
-                    });
-
-                    data.Body.pipe(res);
-                } catch (err) {
-                    controller.abort();
-                    throw err;
-                } finally {
-                    controller.abort();
-                    req.off("close", abortOnClose);
-                    res.off("close", abortOnClose);
-                }
+                data.Body.pipe(res);
             } else {
-                const controller = new AbortController();
-
-                req.once("close", () => {
-                    controller.abort();
-                    data?.Body?.destroy();
+                // Full requests
+                const getCommand = new GetObjectCommand({
+                    Bucket: env.S3_BUCKET,
+                    Key,
                 });
-                res.once("close", () => {
-                    controller.abort();
+                const data = await s3Client.send(getCommand);
+
+                res.status(200).set({
+                    "Content-Length": fileSize,
+                    "Content-Type": contentType,
+                    "Accept-Ranges": "bytes",
                 });
 
-                try {
-                    // Full requests
-                    const getCommand = new GetObjectCommand({
-                        Bucket: env.S3_BUCKET,
-                        abortSignal: controller.signal,
-                        Key,
-                    });
-                    const data = await s3Client.send(getCommand);
-
-                    res.status(200).set({
-                        "Content-Length": fileSize,
-                        "Content-Type": contentType,
-                        "Accept-Ranges": "bytes",
-                    });
-
-                    data.Body.pipe(res);
-                } catch (err) {
-                    controller.abort();
-                    throw err;
-                } finally {
-                    controller.abort();
-                    req.off("close", abortOnClose);
-                    res.off("close", abortOnClose);
-                }
+                data.Body.pipe(res);
             }
         } catch (err) {
             console.error(err);
